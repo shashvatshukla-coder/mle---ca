@@ -1,0 +1,905 @@
+# ============================================================
+# CREDIT CARD FRAUD DETECTION
+# XGBoost + SMOTE + Threshold Tuning + Feature Importance
+# Comparison with SVM
+# ============================================================
+
+
+# ------------------------------------------------------------
+# 0. Install Required Libraries
+# ------------------------------------------------------------
+
+!pip install -q xgboost imbalanced-learn
+
+
+# ------------------------------------------------------------
+# 1. Import Libraries
+# ------------------------------------------------------------
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    confusion_matrix,
+    classification_report,
+    roc_auc_score,
+    roc_curve,
+    average_precision_score,
+    precision_recall_curve
+)
+
+from imblearn.over_sampling import SMOTE
+
+from xgboost import XGBClassifier
+
+
+
+# ------------------------------------------------------------
+# 2. Load Dataset
+# ------------------------------------------------------------
+
+# Change path according to your uploaded file
+data = pd.read_csv("/content/train_transaction.csv")
+
+print("Dataset Loaded Successfully!")
+print("\nDataset Shape:")
+print(data.shape)
+
+print("\nFirst 5 Rows:")
+print(data.head())
+
+print("\nColumns:")
+print(data.columns)
+
+print("\nTarget Distribution:")
+print(data["isFraud"].value_counts())
+
+print("\nTarget Percentage:")
+print(data["isFraud"].value_counts(normalize=True) * 100)
+
+
+
+# ------------------------------------------------------------
+# 3. OPTIONAL:
+# Reduce Dataset Size For Faster Execution
+# ------------------------------------------------------------
+
+# IEEE-CIS dataset is very large.
+# SVM may become extremely slow.
+# Therefore, use a smaller sample for college practical work.
+
+MAX_ROWS = 80000
+
+if len(data) > MAX_ROWS:
+
+    data = data.sample(
+        n=MAX_ROWS,
+        random_state=42
+    )
+
+print("\nDataset Used:")
+print(data.shape)
+
+
+
+# ------------------------------------------------------------
+# 4. Select Numerical Columns
+# ------------------------------------------------------------
+
+numeric_data = data.select_dtypes(
+    include=["int64", "float64"]
+).copy()
+
+print("\nNumber of Numerical Columns:")
+print(len(numeric_data.columns))
+
+print("\nNumerical Columns:")
+print(numeric_data.columns)
+
+
+
+# ------------------------------------------------------------
+# 5. Remove Transaction ID
+# ------------------------------------------------------------
+
+if "TransactionID" in numeric_data.columns:
+
+    numeric_data.drop(
+        "TransactionID",
+        axis=1,
+        inplace=True
+    )
+
+
+
+# ------------------------------------------------------------
+# 6. Handle Missing Values
+# ------------------------------------------------------------
+
+for col in numeric_data.columns:
+
+    if col != "isFraud":
+
+        numeric_data[col] = (
+            numeric_data[col]
+            .fillna(
+                numeric_data[col].median()
+            )
+        )
+
+
+print("\nMissing Values After Cleaning:")
+print(
+    numeric_data
+    .isnull()
+    .sum()
+    .sum()
+)
+
+
+
+# ------------------------------------------------------------
+# 7. Features And Target
+# ------------------------------------------------------------
+
+X = numeric_data.drop(
+    "isFraud",
+    axis=1
+)
+
+y = numeric_data["isFraud"]
+
+
+print("\nFeature Shape:")
+print(X.shape)
+
+print("\nTarget Shape:")
+print(y.shape)
+
+
+
+# ------------------------------------------------------------
+# 8. Train / Validation / Test Split
+# ------------------------------------------------------------
+
+# 70% training
+# 15% validation
+# 15% testing
+
+X_train, X_temp, y_train, y_temp = train_test_split(
+    X,
+    y,
+    test_size=0.30,
+    random_state=42,
+    stratify=y
+)
+
+
+X_val, X_test, y_val, y_test = train_test_split(
+    X_temp,
+    y_temp,
+    test_size=0.50,
+    random_state=42,
+    stratify=y_temp
+)
+
+
+print("\nTraining Size:")
+print(X_train.shape)
+
+print("\nValidation Size:")
+print(X_val.shape)
+
+print("\nTesting Size:")
+print(X_test.shape)
+
+
+
+# ------------------------------------------------------------
+# 9. Standardization
+# ------------------------------------------------------------
+
+scaler = StandardScaler()
+
+X_train_scaled = scaler.fit_transform(
+    X_train
+)
+
+X_val_scaled = scaler.transform(
+    X_val
+)
+
+X_test_scaled = scaler.transform(
+    X_test
+)
+
+
+
+# ------------------------------------------------------------
+# 10. Apply SMOTE
+# ------------------------------------------------------------
+
+print("\nClass Distribution Before SMOTE:")
+
+print(
+    y_train.value_counts()
+)
+
+
+smote = SMOTE(
+    random_state=42
+)
+
+
+X_train_smote, y_train_smote = (
+    smote.fit_resample(
+        X_train_scaled,
+        y_train
+    )
+)
+
+
+print("\nClass Distribution After SMOTE:")
+
+print(
+    pd.Series(
+        y_train_smote
+    ).value_counts()
+)
+
+
+
+# ------------------------------------------------------------
+# 11. Train XGBoost Model
+# ------------------------------------------------------------
+
+xgb_model = XGBClassifier(
+
+    n_estimators=300,
+
+    learning_rate=0.05,
+
+    max_depth=6,
+
+    subsample=0.8,
+
+    colsample_bytree=0.8,
+
+    objective="binary:logistic",
+
+    eval_metric="logloss",
+
+    random_state=42
+)
+
+
+print("\nTraining XGBoost...")
+
+xgb_model.fit(
+    X_train_smote,
+    y_train_smote
+)
+
+print("XGBoost Training Completed!")
+
+
+
+# ------------------------------------------------------------
+# 12. Validation Predictions
+# ------------------------------------------------------------
+
+val_prob = xgb_model.predict_proba(
+    X_val_scaled
+)[:, 1]
+
+
+
+# ------------------------------------------------------------
+# 13. Decision Threshold Tuning
+# ------------------------------------------------------------
+
+threshold_values = np.arange(
+    0.10,
+    0.91,
+    0.05
+)
+
+
+best_threshold = 0.50
+best_f1 = 0
+
+
+print("\nThreshold Tuning Results:\n")
+
+
+for threshold in threshold_values:
+
+    val_pred = (
+        val_prob >= threshold
+    ).astype(int)
+
+
+    precision = precision_score(
+        y_val,
+        val_pred,
+        zero_division=0
+    )
+
+
+    recall = recall_score(
+        y_val,
+        val_pred,
+        zero_division=0
+    )
+
+
+    f1 = f1_score(
+        y_val,
+        val_pred,
+        zero_division=0
+    )
+
+
+    print(
+        f"Threshold = {threshold:.2f} | "
+        f"Precision = {precision:.4f} | "
+        f"Recall = {recall:.4f} | "
+        f"F1 = {f1:.4f}"
+    )
+
+
+    if f1 > best_f1:
+
+        best_f1 = f1
+
+        best_threshold = threshold
+
+
+
+print("\nBest Threshold:")
+print(best_threshold)
+
+print("\nBest Validation F1 Score:")
+print(best_f1)
+
+
+
+# ------------------------------------------------------------
+# 14. XGBoost Test Predictions
+# ------------------------------------------------------------
+
+xgb_prob = xgb_model.predict_proba(
+    X_test_scaled
+)[:, 1]
+
+
+xgb_pred = (
+    xgb_prob >= best_threshold
+).astype(int)
+
+
+
+# ------------------------------------------------------------
+# 15. XGBoost Evaluation
+# ------------------------------------------------------------
+
+xgb_accuracy = accuracy_score(
+    y_test,
+    xgb_pred
+)
+
+
+xgb_precision = precision_score(
+    y_test,
+    xgb_pred,
+    zero_division=0
+)
+
+
+xgb_recall = recall_score(
+    y_test,
+    xgb_pred,
+    zero_division=0
+)
+
+
+xgb_f1 = f1_score(
+    y_test,
+    xgb_pred,
+    zero_division=0
+)
+
+
+xgb_auc = roc_auc_score(
+    y_test,
+    xgb_prob
+)
+
+
+xgb_pr_auc = average_precision_score(
+    y_test,
+    xgb_prob
+)
+
+
+
+print("\n===================================")
+print("XGBOOST RESULTS")
+print("===================================")
+
+print("Accuracy:", xgb_accuracy)
+
+print("Precision:", xgb_precision)
+
+print("Recall:", xgb_recall)
+
+print("F1 Score:", xgb_f1)
+
+print("ROC-AUC:", xgb_auc)
+
+print("PR-AUC:", xgb_pr_auc)
+
+
+
+print("\nXGBoost Confusion Matrix:")
+
+xgb_cm = confusion_matrix(
+    y_test,
+    xgb_pred
+)
+
+print(xgb_cm)
+
+
+
+print("\nXGBoost Classification Report:")
+
+print(
+    classification_report(
+        y_test,
+        xgb_pred
+    )
+)
+
+
+
+# ------------------------------------------------------------
+# 16. XGBoost ROC Curve
+# ------------------------------------------------------------
+
+xgb_fpr, xgb_tpr, _ = roc_curve(
+    y_test,
+    xgb_prob
+)
+
+
+plt.figure(figsize=(7, 5))
+
+plt.plot(
+    xgb_fpr,
+    xgb_tpr,
+    label=f"XGBoost AUC = {xgb_auc:.3f}"
+)
+
+plt.plot(
+    [0, 1],
+    [0, 1],
+    linestyle="--",
+    label="Random Classifier"
+)
+
+plt.xlabel(
+    "False Positive Rate"
+)
+
+plt.ylabel(
+    "True Positive Rate"
+)
+
+plt.title(
+    "ROC Curve - XGBoost Fraud Detection"
+)
+
+plt.legend()
+
+plt.show()
+
+
+
+# ------------------------------------------------------------
+# 17. Precision Recall Curve
+# ------------------------------------------------------------
+
+precision_curve, recall_curve, _ = (
+    precision_recall_curve(
+        y_test,
+        xgb_prob
+    )
+)
+
+
+plt.figure(figsize=(7, 5))
+
+plt.plot(
+    recall_curve,
+    precision_curve
+)
+
+plt.xlabel("Recall")
+
+plt.ylabel("Precision")
+
+plt.title(
+    "Precision-Recall Curve - XGBoost"
+)
+
+plt.show()
+
+
+
+# ------------------------------------------------------------
+# 18. Feature Importance
+# ------------------------------------------------------------
+
+importance = (
+    xgb_model
+    .feature_importances_
+)
+
+
+feature_importance = pd.DataFrame({
+
+    "Feature": X.columns,
+
+    "Importance": importance
+
+})
+
+
+feature_importance = (
+    feature_importance
+    .sort_values(
+        by="Importance",
+        ascending=False
+    )
+)
+
+
+print("\nTop 15 Important Features:")
+
+print(
+    feature_importance
+    .head(15)
+)
+
+
+
+# Plot Top Features
+
+top_features = (
+    feature_importance
+    .head(15)
+)
+
+
+plt.figure(
+    figsize=(10, 7)
+)
+
+
+plt.barh(
+
+    top_features["Feature"][::-1],
+
+    top_features["Importance"][::-1]
+)
+
+
+plt.xlabel(
+    "Importance Score"
+)
+
+plt.ylabel(
+    "Feature"
+)
+
+plt.title(
+    "Top 15 XGBoost Feature Importances"
+)
+
+plt.show()
+
+
+
+# ------------------------------------------------------------
+# 19. SVM Baseline Model
+# ------------------------------------------------------------
+
+print("\nTraining SVM...")
+
+svm_model = SVC(
+
+    kernel="rbf",
+
+    C=1.0,
+
+    gamma="scale",
+
+    probability=True,
+
+    class_weight="balanced",
+
+    random_state=42
+)
+
+
+svm_model.fit(
+    X_train_smote,
+    y_train_smote
+)
+
+
+print("SVM Training Completed!")
+
+
+
+# ------------------------------------------------------------
+# 20. SVM Predictions
+# ------------------------------------------------------------
+
+svm_prob = svm_model.predict_proba(
+    X_test_scaled
+)[:, 1]
+
+
+svm_pred = svm_model.predict(
+    X_test_scaled
+)
+
+
+
+# ------------------------------------------------------------
+# 21. SVM Evaluation
+# ------------------------------------------------------------
+
+svm_accuracy = accuracy_score(
+    y_test,
+    svm_pred
+)
+
+
+svm_precision = precision_score(
+    y_test,
+    svm_pred,
+    zero_division=0
+)
+
+
+svm_recall = recall_score(
+    y_test,
+    svm_pred,
+    zero_division=0
+)
+
+
+svm_f1 = f1_score(
+    y_test,
+    svm_pred,
+    zero_division=0
+)
+
+
+svm_auc = roc_auc_score(
+    y_test,
+    svm_prob
+)
+
+
+svm_pr_auc = average_precision_score(
+    y_test,
+    svm_prob
+)
+
+
+
+print("\n===================================")
+print("SVM RESULTS")
+print("===================================")
+
+print("Accuracy:", svm_accuracy)
+
+print("Precision:", svm_precision)
+
+print("Recall:", svm_recall)
+
+print("F1 Score:", svm_f1)
+
+print("ROC-AUC:", svm_auc)
+
+print("PR-AUC:", svm_pr_auc)
+
+
+
+print("\nSVM Confusion Matrix:")
+
+print(
+    confusion_matrix(
+        y_test,
+        svm_pred
+    )
+)
+
+
+
+print("\nSVM Classification Report:")
+
+print(
+    classification_report(
+        y_test,
+        svm_pred
+    )
+)
+
+
+
+# ------------------------------------------------------------
+# 22. Compare XGBoost And SVM
+# ------------------------------------------------------------
+
+results = pd.DataFrame({
+
+    "Model": [
+        "XGBoost",
+        "SVM"
+    ],
+
+    "Accuracy": [
+        xgb_accuracy,
+        svm_accuracy
+    ],
+
+    "Precision": [
+        xgb_precision,
+        svm_precision
+    ],
+
+    "Recall": [
+        xgb_recall,
+        svm_recall
+    ],
+
+    "F1 Score": [
+        xgb_f1,
+        svm_f1
+    ],
+
+    "ROC-AUC": [
+        xgb_auc,
+        svm_auc
+    ],
+
+    "PR-AUC": [
+        xgb_pr_auc,
+        svm_pr_auc
+    ]
+
+})
+
+
+print("\n===================================")
+print("MODEL COMPARISON")
+print("===================================")
+
+print(results)
+
+
+
+# ------------------------------------------------------------
+# 23. ROC Curve Comparison
+# ------------------------------------------------------------
+
+svm_fpr, svm_tpr, _ = roc_curve(
+    y_test,
+    svm_prob
+)
+
+
+plt.figure(
+    figsize=(8, 6)
+)
+
+
+plt.plot(
+    xgb_fpr,
+    xgb_tpr,
+    label=f"XGBoost AUC = {xgb_auc:.3f}"
+)
+
+
+plt.plot(
+    svm_fpr,
+    svm_tpr,
+    label=f"SVM AUC = {svm_auc:.3f}"
+)
+
+
+plt.plot(
+    [0, 1],
+    [0, 1],
+    linestyle="--",
+    label="Random"
+)
+
+
+plt.xlabel(
+    "False Positive Rate"
+)
+
+plt.ylabel(
+    "True Positive Rate"
+)
+
+plt.title(
+    "ROC Curve Comparison"
+)
+
+plt.legend()
+
+plt.show()
+
+
+
+# ------------------------------------------------------------
+# 24. Final Interpretation
+# ------------------------------------------------------------
+
+tn, fp, fn, tp = confusion_matrix(
+    y_test,
+    xgb_pred
+).ravel()
+
+
+print("\n===================================")
+print("XGBOOST ERROR ANALYSIS")
+print("===================================")
+
+print("True Negatives:", tn)
+
+print("False Positives:", fp)
+
+print("False Negatives:", fn)
+
+print("True Positives:", tp)
+
+
+print("\nFalse Negative:")
+print(
+    "A fraudulent transaction was predicted as legitimate."
+)
+
+print(
+    "This can cause direct financial loss."
+)
+
+
+print("\nFalse Positive:")
+print(
+    "A legitimate transaction was predicted as fraud."
+)
+
+print(
+    "This may block genuine customers and cause inconvenience."
+)
+
+
+print("\nBest Decision Threshold:")
+print(best_threshold)
